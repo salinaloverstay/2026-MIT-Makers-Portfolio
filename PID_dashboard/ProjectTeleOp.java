@@ -172,6 +172,7 @@ public class ProjectTeleOp extends LinearOpMode {
    public double getPidError() {
        double targetX = 50;
        double targetY = 50;
+       // example coordinates
 
 
        double dx = targetX - getRobotX();
