@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>FTC Robot Dashboard</title>
+    <!-- SocketIO library -->
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <!-- Chart.js library for PID graph -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #111;
+            color: white;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+
+        h1 {
+            margin-top: 15px;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            align-items: flex-start;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        #field {
+            border: 2px solid white;
+            background-color: black;
+        }
+
+        .side-panel {
+            width: 400px;
+        }
+
+        .telemetry-box {
+            background-color: #222;
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 10px;
+            text-align: left;
+        }
+
+        .warning {
+            color: red;
+            font-weight: bold;
+        }
+
+        button {
+            margin-top: 10px;
+            padding: 10px 15px;
+            font-size: 14px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+        }
+
+    </style>
+</head>
+<body>
+
+<h1>Kylie's Dashboard of Doom</h1>
+
+<div class="container">
+
+    <canvas id="field" width="800" height="800"></canvas>
+
+    <div class="side-panel">
+
+        <div class="telemetry-box">
+            <h3>Robot Telemetry</h3>
+            <div id="telemetry"></div>
+        </div>
+
+        <div class="telemetry-box">
+            <h3>Warnings</h3>
+            <div id="warnings"></div>
+        </div>
+
+        <div class="telemetry-box">
+            <h3>PID Error Graph</h3>
+            <canvas id="pidChart"></canvas>
+        </div>
+
+	<div class="telemetry-box">
+    <h3>Live PID Tuning</h3>
+
+    <label>P:</label>
+    <input id="pSlider"
+           type="range"
+           min="0"
+           max="0.1"
+           step="0.001"
+           value="0.02">
+
+    <span id="pValue">0.02</span>
+
+    <br><br>
+
+    <label>I:</label>
+    <input id="iSlider"
+           type="range"
+           min="0"
+           max="0.01"
+           step="0.0001"
+           value="0">
+
+    <span id="iValue">0</span>
+
+    <br><br>
+
+    <label>D:</label>
+    <input id="dSlider"
+           type="range"
+           min="0"
+           max="0.01"
+           step="0.0001"
+           value="0.001">
+
+    <span id="dValue">0.001</span>
+
+    <br><br>
+
+    <button onclick="sendPID()">
+        Send PID
+    </button>
+</div>
+
+        <div class="telemetry-box">
+            <h3>Replay Controls</h3>
+            <button onclick="startReplay()">Replay Run</button>
+            <button onclick="clearTrail()">Clear Trail</button>
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+console.log("Dashboard loaded");
+
+const socket = io();
+
+socket.on("connect", () => {
+    console.log("✅ Socket connected!");
+});
+
+socket.on("disconnect", () => {
+    console.log("❌ Socket disconnected");
+});
+
+const canvas = document.getElementById("field");
+const ctx = canvas.getContext("2d");
+
+const telemetryDiv = document.getElementById("telemetry");
+const warningsDiv = document.getElementById("warnings");
+
+const SCALE = 800 / 144;
+const CANVAS_SIZE = 800;
+
+let trail = [];
+let replayData = [];
+
+let latestData = null;
+
+const fieldImage = new Image();
+fieldImage.src = "/static/field.png";
+
+fieldImage.onload = function()
+{
+    console.log("Field image loaded");
+
+    draw();
+};
+
+function toCanvasX(x)
+{
+    return canvas.width / 2 + x * SCALE;
+}
+
+function toCanvasY(y)
+{
+    return canvas.height / 2 - y * SCALE;
+}
+
+const chart = new Chart(document.getElementById("pidChart"), {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [
+{
+    label: 'Path Error',
+    data: []
+}
+]
+    },
+    options: {
+        responsive: true,
+        animation: false,
+        scales: {
+            x: {
+                display: false
+            }
+        }
+    }
+});
+socket.on("robot_data", function(data) {
+
+    console.log("Received robot data:", data);
+
+    latestData = data;
+
+    replayData.push(JSON.parse(JSON.stringify(data)));
+
+    trail.push({
+        x: data.x,
+        y: data.y
+    });
+    if(trail.length > 1000)
+        trail.shift();
+
+    updateTelemetry(data);
+
+    updateCharts(data);
+
+    detectProblems(data);
+
+    draw();
+
+});
+function draw() {
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    drawField();
+
+    drawTrail();
+
+    if(latestData != null) {
+
+        drawRobot(latestData);
+
+        drawHeading(latestData);
+
+        drawVelocity(latestData);
+    }
+}
+
+function drawField()
+{
+    ctx.fillStyle = "#202020";
+    ctx.fillRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+    if(fieldImage.complete && fieldImage.naturalWidth > 0)
+    {
+        ctx.drawImage(
+            fieldImage,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
+    }
+}
+function drawTrail() {
+
+    if(trail.length < 2)
+        return;
+
+    ctx.beginPath();
+
+    for(let i = 0; i < trail.length; i++) {
+
+        let p = trail[i];
+
+        let px = toCanvasX(p.x);
+        let py = toCanvasY(p.y);
+
+        if(i === 0)
+            ctx.moveTo(px, py);
+        else
+            ctx.lineTo(px, py);
+    }
+    ctx.strokeStyle = "cyan";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+function drawRobot(data)
+{
+    const x = toCanvasX(data.x);
+    const y = toCanvasY(data.y);
+
+    console.log("Drawing robot at:", x, y);
+
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.fillStyle = "red";
+    ctx.fill();
+}
+function drawHeading(data) {
+
+    let x = toCanvasX(data.x);
+    let y = toCanvasY(data.y);
+
+    ctx.beginPath();
+
+    ctx.moveTo(x, y);
+
+    ctx.lineTo(
+        x + Math.cos(data.heading) * 40,
+        y - Math.sin(data.heading) * 40
+    );
+
+    ctx.strokeStyle = "lime";
+    ctx.lineWidth = 4;
+    ctx.stroke();
+}
+function drawVelocity(data) {
+
+    let x = toCanvasX(data.x);
+    let y = toCanvasY(data.y);
+
+    let velocityScale = 8;
+
+    ctx.beginPath();
+
+    ctx.moveTo(x, y);
+
+    ctx.lineTo(
+        x + Math.cos(data.heading) * data.velocity * velocityScale,
+        y - Math.sin(data.heading) * data.velocity * velocityScale
+    );
+
+    ctx.strokeStyle = "yellow";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+function drawTargetPose(data) {
+
+    if(data.targetX === undefined)
+        return;
+
+    let x = toCanvasX(data.targetX);
+    let y = toCanvasY(data.targetY);
+
+    ctx.beginPath();
+    ctx.arc(x, y, 10, 0, Math.PI * 2);
+    ctx.strokeStyle = "blue";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+function drawErrorVector(data) {
+
+    if(data.targetX === undefined)
+        return;
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+    toCanvasX(data.x),
+    toCanvasY(data.y)
+);
+
+ctx.lineTo(
+    toCanvasX(data.targetX),
+    toCanvasY(data.targetY)
+);
+
+    ctx.strokeStyle = "orange";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+function updateTelemetry(data) {
+
+    telemetryDiv.innerHTML = `
+        <b>X:</b> ${data.x.toFixed(2)}<br>
+        <b>Y:</b> ${data.y.toFixed(2)}<br>
+        <b>Heading:</b> ${data.heading.toFixed(2)}<br>
+        <b>Velocity:</b> ${data.velocity.toFixed(2)}<br>
+        <b>XError:</b> ${(data.xError || 0).toFixed(2)}<br>
+	<b>YError:</b> ${(data.yError || 0).toFixed(2)}<br>
+	<b>Herror:</b> ${(data.Herror || 0).toFixed(2)}<br>
+    `;
+}
+function updateCharts(data)
+{
+    chart.data.labels.push("");
+
+    chart.data.datasets[0].data.push(
+        data.error || 0
+    );
+
+    if(chart.data.labels.length > 100)
+    {
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
+    }
+
+    chart.update();
+}
+function detectProblems(data) {
+
+    let warnings = [];
+
+    let translationalError = Math.sqrt(
+        Math.pow(data.xError || 0, 2) +
+        Math.pow(data.yError || 0, 2)
+    );
+
+    if(translationalError > 8) {
+        warnings.push("Large translational error detected");
+    }
+
+    if(Math.abs(data.headingError || 0) > 0.5) {
+        warnings.push("Large heading error detected");
+    }
+
+    if(data.velocity < 0.2 && translationalError > 5) {
+        warnings.push("Possible robot stall");
+    }
+
+    if(Math.abs(data.velocity) > 50) {
+        warnings.push("Velocity spike detected");
+    }
+
+    if(warnings.length === 0) {
+        warnings.push("No major issues detected");
+    }
+
+    let html = "";
+
+    for(let i = 0; i < warnings.length; i++) {
+        html += "<div class='warning'>" + warnings[i] + "</div>";
+    }
+
+    warningsDiv.innerHTML = html;
+}
+function clearTrail() {
+    trail = [];
+}
+function startReplay() {
+
+    if(replayData.length === 0)
+        return;
+
+    console.log("Starting replay...");
+
+    let index = 0;
+
+    trail = [];
+
+    const replayInterval = setInterval(() => {
+
+        if(index >= replayData.length) {
+            clearInterval(replayInterval);
+            return;
+        }
+        latestData = replayData[index];
+
+        trail.push({
+            x: latestData.x,
+            y: latestData.y
+        });
+
+        draw();
+
+        index++;
+
+    }, 100);
+}
+
+document.getElementById("pSlider").oninput = function()
+{
+    document.getElementById("pValue").innerText =
+        this.value;
+};
+
+document.getElementById("iSlider").oninput = function()
+{
+    document.getElementById("iValue").innerText =
+        this.value;
+};
+
+document.getElementById("dSlider").oninput = function()
+{
+    document.getElementById("dValue").innerText =
+        this.value;
+};
+function sendPID()
+{
+    const pid =
+    {
+        p: parseFloat(
+            document.getElementById("pSlider").value
+        ),
+
+        i: parseFloat(
+            document.getElementById("iSlider").value
+        ),
+
+        d: parseFloat(
+            document.getElementById("dSlider").value
+        )
+    };
+
+    fetch("/set_pid",
+    {
+        method: "POST",
+
+        headers:
+        {
+            "Content-Type":
+            "application/json"
+        },
+
+        body: JSON.stringify(pid)
+    });
+
+    console.log("PID Sent:", pid);
+}
+
+
+draw();
+
+</script>
+
+</body>
+</html>
