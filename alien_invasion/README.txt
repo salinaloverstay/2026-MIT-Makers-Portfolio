@@ -1,1 +1,1 @@
-The contents of this folder corresponds to code written for my Alien Invasion Python game.  These code programs were written based on existing instructions found in Chapter 12 of "Python Crash Course", 2016 by Eric Matthes.
+The contents of this folder corresponds to code written for my Alien Invasion Python game.
